@@ -16,6 +16,7 @@ import org.apache.hadoop.util.Tool;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
+import java.util.HashMap;
 
 public class MeansValues extends Configured implements Tool {
 
@@ -93,19 +94,31 @@ public class MeansValues extends Configured implements Tool {
     }
 
     public static class Map extends Mapper<Text, IntWritable, Text, IntPair> {
+
+        private HashMap<String,IntPair> buffer;
+
         @Override
         protected void setup(Context context) throws IOException, InterruptedException {
-            super.setup(context);
+            buffer = new HashMap<String, IntPair>();
         }
 
         @Override
         protected void map(Text key, IntWritable value, Context context) throws IOException, InterruptedException {
-            context.write(key, new IntPair(value.get(), 1));
+            String word = key.toString();
+            int count = value.get();
+            if (buffer.containsKey(word)) {
+                IntPair intPair = buffer.get(word);
+                intPair.set(intPair.getFirst() + count, intPair.getSecond() + 1);
+            } else {
+                buffer.put(word, new IntPair(count, 1));
+            }
         }
 
         @Override
         protected void cleanup(Context context) throws IOException, InterruptedException {
-            super.cleanup(context);
+            for (String word : buffer.keySet()) {
+                context.write(new Text(word), buffer.get(word));
+            }
         }
     }
 
