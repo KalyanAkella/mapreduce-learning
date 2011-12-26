@@ -16,6 +16,7 @@ import org.apache.hadoop.util.ToolRunner;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -178,22 +179,31 @@ public class Pairs extends Configured implements Tool {
     }
 
     public static class Map extends Mapper<LongWritable, Text, StringPair, IntWritable> {
+
+        private HashMap<StringPair,Integer> buffer;
+
         @Override
         protected void setup(Context context) throws IOException, InterruptedException {
-            super.setup(context);
+            buffer = new HashMap<StringPair, Integer>();
         }
 
         @Override
         protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
             String text = value.toString();
             for (StringPair wordPair : new WordPairs(text)) {
-                context.write(wordPair, new IntWritable(1));
+                if (buffer.containsKey(wordPair)) {
+                    buffer.put(wordPair, buffer.get(wordPair) + 1);
+                } else {
+                    buffer.put(wordPair, 1);
+                }
             }
         }
 
         @Override
         protected void cleanup(Context context) throws IOException, InterruptedException {
-            super.cleanup(context);
+            for (StringPair wordPair : buffer.keySet()) {
+                context.write(wordPair, new IntWritable(buffer.get(wordPair)));
+            }
         }
     }
 
