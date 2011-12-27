@@ -14,14 +14,28 @@ import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.StringTokenizer;
 
 public class Stripes extends Configured implements Tool {
 
+    private static void add(MapWritable to, MapWritable from) {
+        for (Writable fromKey : from.keySet()) {
+            if (to.containsKey(fromKey)) {
+                to.put(fromKey, new IntWritable(((IntWritable) to.get(fromKey)).get() + ((IntWritable) from.get(fromKey)).get()));
+            } else {
+                to.put(fromKey, from.get(fromKey));
+            }
+        }
+    }
+
     public static class Map extends Mapper<LongWritable, Text, Text, PrintableMapWritable> {
+
+        private HashMap<String,PrintableMapWritable> buffer;
+
         @Override
         protected void setup(Context context) throws IOException, InterruptedException {
-            super.setup(context);
+            buffer = new HashMap<String, PrintableMapWritable>();
         }
 
         @Override
@@ -40,14 +54,20 @@ public class Stripes extends Configured implements Tool {
                             mapWritable.put(neighbour, new IntWritable(1));
                         }
                     }
-                    context.write(new Text(word), mapWritable);
+                    if (buffer.containsKey(word)) {
+                        add(buffer.get(word), mapWritable);
+                    } else {
+                        buffer.put(word, mapWritable);
+                    }
                 }
             }
         }
 
         @Override
         protected void cleanup(Context context) throws IOException, InterruptedException {
-            super.cleanup(context);
+            for (String word : buffer.keySet()) {
+                context.write(new Text(word), buffer.get(word));
+            }
         }
     }
 
@@ -64,16 +84,6 @@ public class Stripes extends Configured implements Tool {
                 add(mapWritable, neighbourCounts);
             }
             context.write(key, mapWritable);
-        }
-
-        private void add(MapWritable to, MapWritable from) {
-            for (Writable fromKey : from.keySet()) {
-                if (to.containsKey(fromKey)) {
-                    to.put(fromKey, new IntWritable(((IntWritable) to.get(fromKey)).get() + ((IntWritable) from.get(fromKey)).get()));
-                } else {
-                    to.put(fromKey, from.get(fromKey));
-                }
-            }
         }
 
         @Override
