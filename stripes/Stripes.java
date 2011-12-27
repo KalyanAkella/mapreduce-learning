@@ -1,10 +1,7 @@
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.io.ArrayWritable;
-import org.apache.hadoop.io.LongWritable;
-import org.apache.hadoop.io.MapWritable;
-import org.apache.hadoop.io.Text;
+import org.apache.hadoop.io.*;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Mapper;
 import org.apache.hadoop.mapreduce.Reducer;
@@ -17,88 +14,11 @@ import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.List;
 import java.util.StringTokenizer;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public class Stripes extends Configured implements Tool {
 
-    public static class TextArray extends ArrayWritable {
-        public TextArray() {
-            super(Text.class);
-        }
-
-        public static TextArray from(List<String> strings) {
-            TextArray textArray = new TextArray();
-            Text[] values = new Text[strings.size()];
-            for (int i = 0; i < values.length; i++) {
-                values[i] = new Text(strings.get(i));
-            }
-            textArray.set(values);
-            return textArray;
-        }
-    }
-
-    public static class Neighbours implements Iterable<TextArray> {
-        private final Pattern dotPattern = Pattern.compile("\\.");
-
-        private String text;
-        private Matcher dotMatcher;
-
-        public Neighbours(String text) {
-            this.text = text.endsWith(".") ? text : text + ".";
-            this.text = this.text.replaceAll("\\.+", ".");
-            this.dotMatcher = dotPattern.matcher(this.text);
-        }
-
-        public Iterator<TextArray> iterator() {
-            return new Iterator<TextArray>() {
-
-                private int currentIndex = 0, currentWordIndex = 0;
-                private List<String> words = new ArrayList<String>();
-
-                public boolean hasNext() {
-                    return !dotMatcher.hitEnd() && currentIndex < text.length();
-                }
-
-                public TextArray next() {
-                    TextArray result = null;
-                    if (words.size() == 0 && dotMatcher.find()) {
-                        String sentence = text.substring(currentIndex, dotMatcher.start());
-                        StringTokenizer tokenizer = new StringTokenizer(sentence);
-                        while (tokenizer.hasMoreTokens()) {
-                            words.add(tokenizer.nextToken());
-                        }
-                    }
-                    if (currentWordIndex == 0) {
-                        result = TextArray.from(words.subList(currentWordIndex + 1, words.size()));
-                        currentWordIndex ++;
-                    } else if (currentWordIndex == words.size() - 1) {
-                        result = TextArray.from(words.subList(0, currentWordIndex));
-                        currentWordIndex = 0;
-                        currentIndex = dotMatcher.end();
-                        words.clear();
-                    } else {
-                        ArrayList<String> strings = new ArrayList<String>();
-                        strings.addAll(words.subList(0, currentWordIndex));
-                        strings.addAll(words.subList(currentWordIndex + 1, words.size()));
-                        result = TextArray.from(strings);
-                        currentWordIndex ++;
-                    }
-                    return result;
-                }
-
-                public void remove() {
-                    throw new UnsupportedOperationException();
-                }
-            };
-        }
-    }
-
-    public static class Map extends Mapper<LongWritable, Text, Text, MapWritable> {
+    public static class Map extends Mapper<LongWritable, Text, Text, PrintableMapWritable> {
         @Override
         protected void setup(Context context) throws IOException, InterruptedException {
             super.setup(context);
@@ -106,7 +26,23 @@ public class Stripes extends Configured implements Tool {
 
         @Override
         protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
-            super.map(key, value, context);
+            String text = value.toString();
+            StringTokenizer tokenizer = new StringTokenizer(text);
+            for (TextArray textArray : new Neighbours(text)) {
+                if (tokenizer.hasMoreTokens() && textArray != null) {
+                    String word = tokenizer.nextToken();
+                    PrintableMapWritable mapWritable = new PrintableMapWritable();
+                    Writable[] neighbours = textArray.get();
+                    for (Writable neighbour : neighbours) {
+                        if (mapWritable.containsKey(neighbour)) {
+                            mapWritable.put(neighbour, new IntWritable(((IntWritable) mapWritable.get(neighbour)).get() + 1));
+                        } else {
+                            mapWritable.put(neighbour, new IntWritable(1));
+                        }
+                    }
+                    context.write(new Text(word), mapWritable);
+                }
+            }
         }
 
         @Override
@@ -115,15 +51,29 @@ public class Stripes extends Configured implements Tool {
         }
     }
 
-    public static class Reduce extends Reducer<Text, MapWritable, Text, MapWritable> {
+    public static class Reduce extends Reducer<Text, PrintableMapWritable, Text, PrintableMapWritable> {
         @Override
         protected void setup(Context context) throws IOException, InterruptedException {
             super.setup(context);
         }
 
         @Override
-        protected void reduce(Text key, Iterable<MapWritable> values, Context context) throws IOException, InterruptedException {
-            super.reduce(key, values, context);
+        protected void reduce(Text key, Iterable<PrintableMapWritable> values, Context context) throws IOException, InterruptedException {
+            PrintableMapWritable mapWritable = new PrintableMapWritable();
+            for (PrintableMapWritable neighbourCounts : values) {
+                add(mapWritable, neighbourCounts);
+            }
+            context.write(key, mapWritable);
+        }
+
+        private void add(MapWritable to, MapWritable from) {
+            for (Writable fromKey : from.keySet()) {
+                if (to.containsKey(fromKey)) {
+                    to.put(fromKey, new IntWritable(((IntWritable) to.get(fromKey)).get() + ((IntWritable) from.get(fromKey)).get()));
+                } else {
+                    to.put(fromKey, from.get(fromKey));
+                }
+            }
         }
 
         @Override
@@ -136,7 +86,7 @@ public class Stripes extends Configured implements Tool {
         Job job = new Job();
 
         job.setOutputKeyClass(Text.class);
-        job.setOutputValueClass(MapWritable.class);
+        job.setOutputValueClass(PrintableMapWritable.class);
 
         job.setMapperClass(Map.class);
         job.setCombinerClass(Reduce.class);
