@@ -1,7 +1,10 @@
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.io.*;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Mapper;
 import org.apache.hadoop.mapreduce.Reducer;
@@ -14,10 +17,11 @@ import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.StringTokenizer;
 
-public class Stripes extends Configured implements Tool {
+public class RelativeFrequenciesWithStripes extends Configured implements Tool {
 
     public static class Map extends Mapper<LongWritable, Text, Text, Stripe> {
 
@@ -41,11 +45,11 @@ public class Stripes extends Configured implements Tool {
             }
         }
 
-        private void populateBuffer(Stripe stripe, String word) {
+        private void populateBuffer(Stripe mapWritable, String word) {
             if (buffer.containsKey(word)) {
-                buffer.get(word).add(stripe);
+                buffer.get(word).add(mapWritable);
             } else {
-                buffer.put(word, stripe);
+                buffer.put(word, mapWritable);
             }
         }
 
@@ -69,7 +73,7 @@ public class Stripes extends Configured implements Tool {
         }
     }
 
-    public static class Reduce extends Reducer<Text, Stripe, Text, Stripe> {
+    public static class Reduce extends Reducer<Text, Stripe, StringPairArray, IntArray> {
         @Override
         protected void setup(Context context) throws IOException, InterruptedException {
             super.setup(context);
@@ -77,11 +81,41 @@ public class Stripes extends Configured implements Tool {
 
         @Override
         protected void reduce(Text key, Iterable<Stripe> values, Context context) throws IOException, InterruptedException {
-            Stripe stripe = new Stripe();
-            for (Stripe neighbourCounts : values) {
-                stripe.add(neighbourCounts);
+            Stripe marginalBuffer = computeMarginalBufer(values);
+            int marginal = computeMarginal(marginalBuffer);
+
+            ArrayList<StringPair> pairs = new ArrayList<StringPair>();
+            ArrayList<IntWritable> frequencies = new ArrayList<IntWritable>();
+            for (java.util.Map.Entry<Writable, Writable> entry : marginalBuffer.entrySet()) {
+                Text word = (Text) entry.getKey();
+                IntWritable count = (IntWritable) entry.getValue();
+                frequencies.add(new IntWritable(count.get() / marginal));
+                pairs.add(new StringPair(key.toString(), word.toString()));
             }
-            context.write(key, stripe);
+
+            StringPairArray resultPairs = new StringPairArray();
+            resultPairs.set(pairs.toArray(new Writable[pairs.size()]));
+
+            IntArray resultFrequencies = new IntArray();
+            resultFrequencies.set(frequencies.toArray(new Writable[frequencies.size()]));
+
+            context.write(resultPairs, resultFrequencies);
+        }
+
+        private int computeMarginal(Stripe marginalBuffer) {
+            int marginal = 0;
+            for (Writable valueWritable : marginalBuffer.values()) {
+                marginal += ((IntWritable) valueWritable).get();
+            }
+            return marginal;
+        }
+
+        private Stripe computeMarginalBufer(Iterable<Stripe> values) {
+            Stripe marginalBuffer = new Stripe();
+            for (Stripe value : values) {
+                marginalBuffer.add(value);
+            }
+            return marginalBuffer;
         }
 
         @Override
@@ -89,12 +123,12 @@ public class Stripes extends Configured implements Tool {
             super.cleanup(context);
         }
     }
-    
+
     public int run(String[] args) throws Exception {
         Job job = new Job();
 
-        job.setOutputKeyClass(Text.class);
-        job.setOutputValueClass(Stripe.class);
+        job.setOutputKeyClass(StringPairArray.class);
+        job.setOutputValueClass(IntArray.class);
 
         job.setMapperClass(Map.class);
         job.setCombinerClass(Reduce.class);
@@ -106,7 +140,7 @@ public class Stripes extends Configured implements Tool {
         FileInputFormat.setInputPaths(job, new Path(args[0]));
         FileOutputFormat.setOutputPath(job, new Path(args[1]));
 
-        job.setJarByClass(Stripes.class);
+        job.setJarByClass(RelativeFrequenciesWithStripes.class);
 
 //        job.submit();
         job.waitForCompletion(true);
@@ -116,17 +150,6 @@ public class Stripes extends Configured implements Tool {
     public static void main(String[] args) throws Exception {
         Configuration configuration = new Configuration();
         String[] otherArgs = new GenericOptionsParser(configuration, args).getRemainingArgs();
-        ToolRunner.run(new Stripes(), otherArgs);
+        ToolRunner.run(new RelativeFrequenciesWithStripes(), otherArgs);
     }
-
-    private static void testNeighbours() {
-        String text = "Returns a view of the portion of this list between the specified fromIndex inclusive and toIndex exclusive. (If fromIndex and toIndex are equal the returned list is empty.) The returned list is backed by this list so non-structural changes in the returned list are reflected in this list and vice-versa. The returned list supports all of the optional list operations supported by this list.";
-        for (TextArray textArray : new Neighbours(text)) {
-            for (String s : textArray.toStrings()) {
-                System.out.print(s + ",");
-            }
-            System.out.println();
-        }
-    }
-
 }
